@@ -24,9 +24,10 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  request: NextRequest,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   try {
     const { id } = await params
     const client = await clientPromise
