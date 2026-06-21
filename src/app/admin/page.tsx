@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 
 interface Slot {
   _id: string
@@ -31,6 +31,31 @@ interface Demande {
   commentaires?: string
 }
 
+const STATUT_COLORS: Record<string, string> = {
+  disponible: '#4CAF50',
+  attente: '#FF9800',
+  reserve: '#f44336',
+}
+
+const STATUT_CYCLE: Record<string, 'disponible' | 'attente' | 'reserve'> = {
+  disponible: 'attente',
+  attente: 'reserve',
+  reserve: 'disponible',
+}
+
+const MOIS_FR = [
+  'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
+  'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'
+]
+
+const JOURS_FR = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
+
+function toLocalDateStr(year: number, month: number, day: number) {
+  const mm = String(month + 1).padStart(2, '0')
+  const dd = String(day).padStart(2, '0')
+  return `${year}-${mm}-${dd}`
+}
+
 export default function AdminPage() {
   const [password, setPassword] = useState('')
   const [authenticated, setAuthenticated] = useState(false)
@@ -39,14 +64,18 @@ export default function AdminPage() {
   const [slots, setSlots] = useState<Slot[]>([])
   const [demandes, setDemandes] = useState<Demande[]>([])
 
-  const [newSlot, setNewSlot] = useState({
-    date: '',
-    periode: 'matin' as 'matin' | 'apres-midi',
-    horaires: '',
-    patients: '',
-    soins: '',
-    commentaire: ''
-  })
+  const today = new Date()
+  const [viewYear, setViewYear] = useState(today.getFullYear())
+  const [viewMonth, setViewMonth] = useState(today.getMonth())
+
+  const [editing, setEditing] = useState<{ date: string; periode: 'matin' | 'apres-midi' } | null>(null)
+  const [formDetails, setFormDetails] = useState({ horaires: '', patients: '', soins: '', commentaire: '' })
+
+  const [multiMode, setMultiMode] = useState(false)
+  const [selectedDays, setSelectedDays] = useState<Set<string>>(new Set())
+  const [multiPeriode, setMultiPeriode] = useState<'matin' | 'apres-midi'>('matin')
+  const [multiForm, setMultiForm] = useState({ horaires: '', patients: '', soins: '', commentaire: '' })
+  const [applying, setApplying] = useState(false)
 
   useEffect(() => {
     fetch('/api/admin/session')
@@ -83,28 +112,29 @@ export default function AdminPage() {
     }
   }
 
-  async function addSlot(e: React.FormEvent) {
-    e.preventDefault()
+  const slotIndex = useMemo(() => {
+    const idx = new Map<string, Slot>()
+    for (const s of slots) {
+      idx.set(`${s.date}_${s.periode}`, s)
+    }
+    return idx
+  }, [slots])
 
+  function buildDetailsPayload(d: { horaires: string; patients: string; soins: string; commentaire: string }) {
     const details: any = {}
-    if (newSlot.horaires) details.horaires = newSlot.horaires
-    if (newSlot.patients) details.patients = parseInt(newSlot.patients)
-    if (newSlot.soins) details.types_soins = newSlot.soins.split(',').map(s => s.trim()).filter(s => s)
-    if (newSlot.commentaire) details.commentaire = newSlot.commentaire
+    if (d.horaires) details.horaires = d.horaires
+    if (d.patients) details.patients = parseInt(d.patients)
+    if (d.soins) details.types_soins = d.soins.split(',').map(s => s.trim()).filter(Boolean)
+    if (d.commentaire) details.commentaire = d.commentaire
+    return Object.keys(details).length > 0 ? details : null
+  }
 
+  async function createSlot(date: string, periode: 'matin' | 'apres-midi', details: any) {
     await fetch('/api/disponibilites', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        date: newSlot.date,
-        periode: newSlot.periode,
-        statut: 'disponible',
-        details: Object.keys(details).length > 0 ? details : null
-      })
+      body: JSON.stringify({ date, periode, statut: 'disponible', details })
     })
-
-    setNewSlot({ date: '', periode: 'matin', horaires: '', patients: '', soins: '', commentaire: '' })
-    fetchData()
   }
 
   async function updateSlotStatus(id: string, statut: string) {
@@ -117,14 +147,84 @@ export default function AdminPage() {
   }
 
   async function deleteSlot(id: string) {
-    if (!confirm('Supprimer cette disponibilité ?')) return
     await fetch(`/api/disponibilites/${id}`, { method: 'DELETE' })
     fetchData()
   }
 
-  if (checking) {
-    return null
+  function handleCellClick(dateStr: string, periode: 'matin' | 'apres-midi') {
+    if (multiMode) {
+      setSelectedDays(prev => {
+        const next = new Set(prev)
+        if (next.has(dateStr)) {
+          next.delete(dateStr)
+        } else {
+          next.add(dateStr)
+        }
+        return next
+      })
+      return
+    }
+
+    const existing = slotIndex.get(`${dateStr}_${periode}`)
+    if (existing) {
+      updateSlotStatus(existing._id, STATUT_CYCLE[existing.statut])
+    } else {
+      setEditing({ date: dateStr, periode })
+      setFormDetails({ horaires: '', patients: '', soins: '', commentaire: '' })
+    }
   }
+
+  async function submitEditForm(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editing) return
+    await createSlot(editing.date, editing.periode, buildDetailsPayload(formDetails))
+    setEditing(null)
+    fetchData()
+  }
+
+  async function applyMultiSelection() {
+    if (selectedDays.size === 0) return
+    setApplying(true)
+    const details = buildDetailsPayload(multiForm)
+    try {
+      await Promise.all(
+        Array.from(selectedDays).map(dateStr => {
+          const existing = slotIndex.get(`${dateStr}_${multiPeriode}`)
+          if (existing) return Promise.resolve()
+          return createSlot(dateStr, multiPeriode, details)
+        })
+      )
+      setSelectedDays(new Set())
+      setMultiForm({ horaires: '', patients: '', soins: '', commentaire: '' })
+      setMultiMode(false)
+      await fetchData()
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  function changeMonth(delta: number) {
+    let m = viewMonth + delta
+    let y = viewYear
+    if (m < 0) { m = 11; y -= 1 }
+    if (m > 11) { m = 0; y += 1 }
+    setViewMonth(m)
+    setViewYear(y)
+  }
+
+  const calendarCells = useMemo(() => {
+    const firstOfMonth = new Date(viewYear, viewMonth, 1)
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
+    const firstWeekday = (firstOfMonth.getDay() + 6) % 7
+
+    const cells: (number | null)[] = []
+    for (let i = 0; i < firstWeekday; i++) cells.push(null)
+    for (let d = 1; d <= daysInMonth; d++) cells.push(d)
+    while (cells.length % 7 !== 0) cells.push(null)
+    return cells
+  }, [viewYear, viewMonth])
+
+  if (checking) return null
 
   if (!authenticated) {
     return (
@@ -140,16 +240,7 @@ export default function AdminPage() {
         />
         <button
           onClick={checkPassword}
-          style={{
-            width: '100%',
-            padding: '0.75rem',
-            border: 'none',
-            borderRadius: 8,
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            color: 'white',
-            fontWeight: 600,
-            cursor: 'pointer'
-          }}
+          style={{ width: '100%', padding: '0.75rem', border: 'none', borderRadius: 8, background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', fontWeight: 600, cursor: 'pointer' }}
         >
           Connexion
         </button>
@@ -164,29 +255,13 @@ export default function AdminPage() {
       <div style={{ display: 'flex', gap: '1rem', margin: '2rem 0', borderBottom: '2px solid #eee' }}>
         <button
           onClick={() => setActiveTab('slots')}
-          style={{
-            padding: '0.75rem 1.5rem',
-            border: 'none',
-            background: 'none',
-            borderBottom: activeTab === 'slots' ? '3px solid #667eea' : 'none',
-            color: activeTab === 'slots' ? '#667eea' : '#666',
-            fontWeight: 600,
-            cursor: 'pointer'
-          }}
+          style={{ padding: '0.75rem 1.5rem', border: 'none', background: 'none', borderBottom: activeTab === 'slots' ? '3px solid #667eea' : 'none', color: activeTab === 'slots' ? '#667eea' : '#666', fontWeight: 600, cursor: 'pointer' }}
         >
           Disponibilités
         </button>
         <button
           onClick={() => setActiveTab('demandes')}
-          style={{
-            padding: '0.75rem 1.5rem',
-            border: 'none',
-            background: 'none',
-            borderBottom: activeTab === 'demandes' ? '3px solid #667eea' : 'none',
-            color: activeTab === 'demandes' ? '#667eea' : '#666',
-            fontWeight: 600,
-            cursor: 'pointer'
-          }}
+          style={{ padding: '0.75rem 1.5rem', border: 'none', background: 'none', borderBottom: activeTab === 'demandes' ? '3px solid #667eea' : 'none', color: activeTab === 'demandes' ? '#667eea' : '#666', fontWeight: 600, cursor: 'pointer' }}
         >
           Demandes ({demandes.filter(d => d.statut === 'attente').length})
         </button>
@@ -194,187 +269,141 @@ export default function AdminPage() {
 
       {activeTab === 'slots' && (
         <div>
-          <div style={{ background: 'white', padding: '2rem', borderRadius: 12, marginBottom: '2rem', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-            <h3>➕ Ajouter une disponibilité</h3>
-            <form onSubmit={addSlot} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginTop: '1rem' }}>
-              <div>
-                <label>Date *</label>
-                <input
-                  type="date"
-                  required
-                  value={newSlot.date}
-                  onChange={e => setNewSlot({...newSlot, date: e.target.value})}
-                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4 }}
-                />
-              </div>
-              <div>
-                <label>Période</label>
-                <select
-                  value={newSlot.periode}
-                  onChange={e => setNewSlot({...newSlot, periode: e.target.value as 'matin' | 'apres-midi'})}
-                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4 }}
-                >
-                  <option value="matin">Matin</option>
-                  <option value="apres-midi">Après-midi</option>
-                </select>
-              </div>
-              <div>
-                <label>Horaires</label>
-                <input
-                  type="text"
-                  value={newSlot.horaires}
-                  onChange={e => setNewSlot({...newSlot, horaires: e.target.value})}
-                  placeholder="08h00 - 14h00"
-                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4 }}
-                />
-              </div>
-              <div>
-                <label>Patients estimé</label>
-                <input
-                  type="number"
-                  value={newSlot.patients}
-                  onChange={e => setNewSlot({...newSlot, patients: e.target.value})}
-                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4 }}
-                />
-              </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label>Types de soins (séparés par virgule)</label>
-                <input
-                  type="text"
-                  value={newSlot.soins}
-                  onChange={e => setNewSlot({...newSlot, soins: e.target.value})}
-                  placeholder="BSI, AMI, Pansements..."
-                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4 }}
-                />
-              </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label>Commentaire / Aperçu tournée</label>
-                <textarea
-                  value={newSlot.commentaire}
-                  onChange={e => setNewSlot({...newSlot, commentaire: e.target.value})}
-                  rows={3}
-                  style={{ width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4 }}
-                />
-              </div>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <button
-                  type="submit"
-                  style={{
-                    padding: '0.75rem 2rem',
-                    border: 'none',
-                    borderRadius: 8,
-                    background: '#4CAF50',
-                    color: 'white',
-                    fontWeight: 600,
-                    cursor: 'pointer'
-                  }}
-                >
-                  Ajouter
-                </button>
-              </div>
-            </form>
-          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <button onClick={() => changeMonth(-1)} style={navBtnStyle}>←</button>
+              <strong style={{ fontSize: '1.2rem', minWidth: 160, textAlign: 'center' }}>
+                {MOIS_FR[viewMonth]} {viewYear}
+              </strong>
+              <button onClick={() => changeMonth(1)} style={navBtnStyle}>→</button>
+            </div>
 
-          <div>
-            <h3>Disponibilités actuelles</h3>
-            {slots.length === 0 ? (
-              <p>Aucune disponibilité.</p>
-            ) : (
-              slots.map(slot => {
-                const dateObj = new Date(slot.date + 'T12:00:00')
-                return (
-                  <div key={slot._id} style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    padding: '1rem',
-                    margin: '0.5rem 0',
-                    background: 'white',
-                    borderRadius: 8,
-                    borderLeft: `4px solid ${
-                      slot.statut === 'disponible' ? '#4CAF50' :
-                      slot.statut === 'attente' ? '#FF9800' : '#f44336'
-                    }`
-                  }}>
-                    <div>
-                      <strong>{dateObj.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</strong>
-                      {' - '}
-                      {slot.periode === 'matin' ? 'Matin' : 'Après-midi'}
-                      {slot.details?.horaires && ` | ${slot.details.horaires}`}
-                      {slot.details?.patients && ` | ${slot.details.patients} patients`}
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      {slot.statut === 'attente' && (
-                        <>
-                          <button
-                            onClick={() => updateSlotStatus(slot._id, 'reserve')}
-                            style={{ padding: '0.5rem 1rem', border: 'none', borderRadius: 4, background: '#4CAF50', color: 'white', cursor: 'pointer' }}
-                          >
-                            ✅ Valider
-                          </button>
-                          <button
-                            onClick={() => updateSlotStatus(slot._id, 'disponible')}
-                            style={{ padding: '0.5rem 1rem', border: 'none', borderRadius: 4, background: '#f44336', color: 'white', cursor: 'pointer' }}
-                          >
-                            ❌ Refuser
-                          </button>
-                        </>
-                      )}
-                      <button
-                        onClick={() => deleteSlot(slot._id)}
-                        style={{ padding: '0.5rem 1rem', border: 'none', borderRadius: 4, background: '#eee', cursor: 'pointer' }}
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'demandes' && (
-        <div>
-          <h3>Demandes reçues</h3>
-          {demandes.length === 0 ? (
-            <p>Aucune demande.</p>
-          ) : (
-            demandes.map(d => (
-              <div key={d._id} style={{
-                background: 'white',
-                padding: '1.5rem',
-                margin: '1rem 0',
+            <button
+              onClick={() => {
+                setMultiMode(m => !m)
+                setSelectedDays(new Set())
+              }}
+              style={{
+                padding: '0.6rem 1.2rem',
+                border: 'none',
                 borderRadius: 8,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                  <strong>{d.nom}</strong>
-                  <span style={{
-                    padding: '0.25rem 0.75rem',
-                    borderRadius: 20,
-                    fontSize: '0.85rem',
-                    background: d.statut === 'attente' ? '#fff3e0' : d.statut === 'validee' ? '#e8f5e9' : '#ffebee',
-                    color: d.statut === 'attente' ? '#e65100' : d.statut === 'validee' ? '#2e7d32' : '#c62828'
-                  }}>
-                    {d.statut === 'attente' ? 'En attente' : d.statut === 'validee' ? 'Validée' : 'Refusée'}
-                  </span>
+                background: multiMode ? '#667eea' : '#eee',
+                color: multiMode ? 'white' : '#333',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              {multiMode ? '✓ Mode sélection multiple actif' : '☐ Sélection multiple'}
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            <span><span style={{ ...legendDot, background: STATUT_COLORS.disponible }} /> Disponible</span>
+            <span><span style={{ ...legendDot, background: STATUT_COLORS.attente }} /> En attente</span>
+            <span><span style={{ ...legendDot, background: STATUT_COLORS.reserve }} /> Réservé</span>
+            <span><span style={{ ...legendDot, background: '#e0e0e0' }} /> Vide (cliquer pour ajouter)</span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, marginBottom: 4 }}>
+            {JOURS_FR.map(j => (
+              <div key={j} style={{ textAlign: 'center', fontWeight: 600, color: '#666', fontSize: '0.85rem' }}>{j}</div>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
+            {calendarCells.map((day, i) => {
+              if (day === null) return <div key={i} />
+
+              const dateStr = toLocalDateStr(viewYear, viewMonth, day)
+              const matinSlot = slotIndex.get(`${dateStr}_matin`)
+              const apremSlot = slotIndex.get(`${dateStr}_apres-midi`)
+              const isSelected = selectedDays.has(dateStr)
+              const isToday = dateStr === toLocalDateStr(today.getFullYear(), today.getMonth(), today.getDate())
+
+              return (
+                <div
+                  key={dateStr}
+                  style={{
+                    border: isSelected ? '2px solid #667eea' : isToday ? '2px solid #999' : '1px solid #ddd',
+                    borderRadius: 8,
+                    overflow: 'hidden',
+                    minHeight: 70,
+                    background: 'white',
+                    cursor: multiMode ? 'pointer' : 'default',
+                  }}
+                  onClick={multiMode ? () => handleCellClick(dateStr, 'matin') : undefined}
+                >
+                  <div style={{ textAlign: 'center', fontSize: '0.8rem', padding: '2px 0', background: isSelected ? '#667eea' : '#f5f5f5', color: isSelected ? 'white' : '#333' }}>
+                    {day}
+                  </div>
+                  {!multiMode && (
+                    <div style={{ display: 'flex', height: 44 }}>
+                      <div
+                        onClick={(e) => { e.stopPropagation(); handleCellClick(dateStr, 'matin') }}
+                        title="Matin"
+                        style={{
+                          flex: 1,
+                          background: matinSlot ? STATUT_COLORS[matinSlot.statut] : '#f0f0f0',
+                          opacity: matinSlot ? 0.85 : 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.65rem',
+                          color: matinSlot ? 'white' : '#aaa',
+                          cursor: 'pointer',
+                          borderRight: '1px solid #fff'
+                        }}
+                      >
+                        M
+                      </div>
+                      <div
+                        onClick={(e) => { e.stopPropagation(); handleCellClick(dateStr, 'apres-midi') }}
+                        title="Après-midi"
+                        style={{
+                          flex: 1,
+                          background: apremSlot ? STATUT_COLORS[apremSlot.statut] : '#f0f0f0',
+                          opacity: apremSlot ? 0.85 : 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.65rem',
+                          color: apremSlot ? 'white' : '#aaa',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        AM
+                      </div>
+                    </div>
+                  )}
+                  {multiMode && (
+                    <div style={{ height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {isSelected ? '✓' : ''}
+                    </div>
+                  )}
                 </div>
-                <p>📧 {d.email} | 📞 {d.telephone}</p>
-                <p>📅 {new Date(d.date + 'T12:00:00').toLocaleDateString('fr-FR')} - {d.periode === 'matin' ? 'Matin' : 'Après-midi'}</p>
-                {d.horaires && <p>🕐 Horaires: {d.horaires}</p>}
-                {d.nb_patients && <p>👥 Patients: {d.nb_patients}</p>}
-                {d.soins && d.soins.length > 0 && <p>💉 Soins: {Array.isArray(d.soins) ? d.soins.join(', ') : d.soins}</p>}
-                {d.commentaires && <p>📝 {d.commentaires}</p>}
-                <p style={{ fontSize: '0.85rem', color: '#999', marginTop: '0.5rem' }}>
-                  Demande reçue le {new Date(d.createdAt).toLocaleString('fr-FR')}
-                </p>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
+              )
+            })}
+          </div>
+
+          {multiMode && selectedDays.size > 0 && (
+            <div style={{ marginTop: '1.5rem', background: 'white', padding: '1.5rem', borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+              <h3>Appliquer à {selectedDays.size} jour{selectedDays.size > 1 ? 's' : ''} sélectionné{selectedDays.size > 1 ? 's' : ''}</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginTop: '1rem' }}>
+                <div>
+                  <label>Période</label>
+                  <select value={multiPeriode} onChange={e => setMultiPeriode(e.target.value as any)} style={inputStyle}>
+                    <option value="matin">Matin</option>
+                    <option value="apres-midi">Après-midi</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Horaires</label>
+                  <input type="text" value={multiForm.horaires} onChange={e => setMultiForm({ ...multiForm, horaires: e.target.value })} placeholder="08h00 - 14h00" style={inputStyle} />
+                </div>
+                <div>
+                  <label>Patients estimé</label>
+                  <input type="number" value={multiForm.patients} onChange={e => setMultiForm({ ...multiForm, patients: e.target.value })} style={inputStyle} />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label>Types de soins (séparés par virgule)</label>
+                  <input type="text" value={multiForm.soins} onChange={e =>
