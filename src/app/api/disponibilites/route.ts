@@ -5,16 +5,10 @@ export async function GET() {
   try {
     const client = await clientPromise
     const db = client.db('iam_inside')
-
-    const slots = await db
-      .collection('disponibilites')
-      .find({})
-      .sort({ date: 1, periode: 1 })
-      .toArray()
-
+    const slots = await db.collection('disponibilites').find({}).toArray()
     return NextResponse.json(slots)
-  } catch (e) {
-    return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
+  } catch (e: any) {
+    return NextResponse.json({ error: 'Erreur serveur', detail: String(e?.message || e) }, { status: 500 })
   }
 }
 
@@ -32,7 +26,7 @@ export async function POST(request: NextRequest) {
     })
 
     return NextResponse.json({ success: true, id: result.insertedId })
-  } catch (e) {
-    return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
+  } catch (e: any) {
+    return NextResponse.json({ error: 'Erreur serveur', detail: String(e?.message || e) }, { status: 500 })
   }
 }
