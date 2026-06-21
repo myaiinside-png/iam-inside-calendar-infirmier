@@ -406,4 +406,160 @@ export default function AdminPage() {
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>
                   <label>Types de soins (séparés par virgule)</label>
-                  <input type="text" value={multiForm.soins} onChange={e =>
+                  <input type="text" value={multiForm.soins} onChange={e => setMultiForm({ ...multiForm, soins: e.target.value })} placeholder="BSI, AMI, Pansements..." style={inputStyle} />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label>Commentaire</label>
+                  <textarea value={multiForm.commentaire} onChange={e => setMultiForm({ ...multiForm, commentaire: e.target.value })} rows={2} style={inputStyle} />
+                </div>
+              </div>
+              <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
+                <button onClick={applyMultiSelection} disabled={applying} style={{ padding: '0.75rem 2rem', border: 'none', borderRadius: 8, background: '#4CAF50', color: 'white', fontWeight: 600, cursor: 'pointer', opacity: applying ? 0.6 : 1 }}>
+                  {applying ? 'Application...' : `✓ Appliquer (${multiPeriode === 'matin' ? 'Matin' : 'Après-midi'})`}
+                </button>
+                <button onClick={() => setSelectedDays(new Set())} style={{ padding: '0.75rem 1.5rem', border: 'none', borderRadius: 8, background: '#eee', cursor: 'pointer' }}>
+                  Désélectionner tout
+                </button>
+              </div>
+              <p style={{ fontSize: '0.8rem', color: '#999', marginTop: '0.5rem' }}>
+                Note : si un jour sélectionné a déjà un créneau pour cette période, il ne sera pas modifié.
+              </p>
+            </div>
+          )}
+
+          {editing && (
+            <div style={overlayStyle} onClick={() => setEditing(null)}>
+              <div style={modalStyle} onClick={e => e.stopPropagation()}>
+                <h3>
+                  Ajouter — {new Date(editing.date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
+                  {' '}({editing.periode === 'matin' ? 'Matin' : 'Après-midi'})
+                </h3>
+                <form onSubmit={submitEditForm} style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
+                  <div>
+                    <label>Horaires</label>
+                    <input type="text" value={formDetails.horaires} onChange={e => setFormDetails({ ...formDetails, horaires: e.target.value })} placeholder="08h00 - 14h00" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label>Patients estimé</label>
+                    <input type="number" value={formDetails.patients} onChange={e => setFormDetails({ ...formDetails, patients: e.target.value })} style={inputStyle} />
+                  </div>
+                  <div>
+                    <label>Types de soins (séparés par virgule)</label>
+                    <input type="text" value={formDetails.soins} onChange={e => setFormDetails({ ...formDetails, soins: e.target.value })} placeholder="BSI, AMI, Pansements..." style={inputStyle} />
+                  </div>
+                  <div>
+                    <label>Commentaire</label>
+                    <textarea value={formDetails.commentaire} onChange={e => setFormDetails({ ...formDetails, commentaire: e.target.value })} rows={2} style={inputStyle} />
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+                    <button type="submit" style={{ flex: 1, padding: '0.75rem', border: 'none', borderRadius: 8, background: '#4CAF50', color: 'white', fontWeight: 600, cursor: 'pointer' }}>
+                      Ajouter
+                    </button>
+                    <button type="button" onClick={() => setEditing(null)} style={{ flex: 1, padding: '0.75rem', border: 'none', borderRadius: 8, background: '#eee', cursor: 'pointer' }}>
+                      Annuler
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: '2.5rem' }}>
+            <h3>Détail des disponibilités du mois</h3>
+            {slots.filter(s => s.date.startsWith(`${viewYear}-${String(viewMonth + 1).padStart(2, '0')}`)).length === 0 ? (
+              <p>Aucune disponibilité ce mois-ci.</p>
+            ) : (
+              slots
+                .filter(s => s.date.startsWith(`${viewYear}-${String(viewMonth + 1).padStart(2, '0')}`))
+                .sort((a, b) => a.date.localeCompare(b.date))
+                .map(slot => {
+                  const dateObj = new Date(slot.date + 'T12:00:00')
+                  return (
+                    <div key={slot._id} style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '0.75rem 1rem', margin: '0.4rem 0', background: 'white', borderRadius: 8,
+                      borderLeft: `4px solid ${STATUT_COLORS[slot.statut]}`
+                    }}>
+                      <div>
+                        <strong>{dateObj.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</strong>
+                        {' - '}{slot.periode === 'matin' ? 'Matin' : 'Après-midi'}
+                        {slot.details?.horaires && ` | ${slot.details.horaires}`}
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        {slot.statut === 'attente' && (
+                          <>
+                            <button onClick={() => updateSlotStatus(slot._id, 'reserve')} style={smallBtn('#4CAF50')}>✅ Valider</button>
+                            <button onClick={() => updateSlotStatus(slot._id, 'disponible')} style={smallBtn('#f44336')}>❌ Refuser</button>
+                          </>
+                        )}
+                        <button onClick={() => deleteSlot(slot._id)} style={smallBtn('#eee', '#333')}>🗑️</button>
+                      </div>
+                    </div>
+                  )
+                })
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'demandes' && (
+        <div>
+          <h3>Demandes reçues</h3>
+          {demandes.length === 0 ? (
+            <p>Aucune demande.</p>
+          ) : (
+            demandes.map(d => (
+              <div key={d._id} style={{ background: 'white', padding: '1.5rem', margin: '1rem 0', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                  <strong>{d.nom}</strong>
+                  <span style={{
+                    padding: '0.25rem 0.75rem', borderRadius: 20, fontSize: '0.85rem',
+                    background: d.statut === 'attente' ? '#fff3e0' : d.statut === 'validee' ? '#e8f5e9' : '#ffebee',
+                    color: d.statut === 'attente' ? '#e65100' : d.statut === 'validee' ? '#2e7d32' : '#c62828'
+                  }}>
+                    {d.statut === 'attente' ? 'En attente' : d.statut === 'validee' ? 'Validée' : 'Refusée'}
+                  </span>
+                </div>
+                <p>📧 {d.email} | 📞 {d.telephone}</p>
+                <p>📅 {new Date(d.date + 'T12:00:00').toLocaleDateString('fr-FR')} - {d.periode === 'matin' ? 'Matin' : 'Après-midi'}</p>
+                {d.horaires && <p>🕐 Horaires: {d.horaires}</p>}
+                {d.nb_patients && <p>👥 Patients: {d.nb_patients}</p>}
+                {d.soins && d.soins.length > 0 && <p>💉 Soins: {Array.isArray(d.soins) ? d.soins.join(', ') : d.soins}</p>}
+                {d.commentaires && <p>📝 {d.commentaires}</p>}
+                <p style={{ fontSize: '0.85rem', color: '#999', marginTop: '0.5rem' }}>
+                  Demande reçue le {new Date(d.createdAt).toLocaleString('fr-FR')}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const navBtnStyle: React.CSSProperties = {
+  width: 36, height: 36, border: 'none', borderRadius: 8, background: '#eee', cursor: 'pointer', fontSize: '1rem'
+}
+
+const legendDot: React.CSSProperties = {
+  display: 'inline-block', width: 10, height: 10, borderRadius: '50%', marginRight: 6
+}
+
+const inputStyle: React.CSSProperties = {
+  width: '100%', padding: '0.5rem', border: '1px solid #ddd', borderRadius: 4
+}
+
+const overlayStyle: React.CSSProperties = {
+  position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.4)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+}
+
+const modalStyle: React.CSSProperties = {
+  background: 'white', padding: '2rem', borderRadius: 12, maxWidth: 420, width: '90%',
+  boxShadow: '0 10px 40px rgba(0,0,0,0.2)'
+}
+
+function smallBtn(bg: string, color = 'white'): React.CSSProperties {
+  return { padding: '0.5rem 1rem', border: 'none', borderRadius: 4, background: bg, color, cursor: 'pointer' }
+}
